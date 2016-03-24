@@ -4,8 +4,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
-	"io"
-	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,37 +22,50 @@ type client struct {
 }
 
 var (
-	Concur   = flag.Int("C", 1, "Concurrence")
-	NumOfReq = flag.Int("N", -1, "Number of request")
-	Tps      = flag.Int("TPS", 1, "TPS limits")
-	Cpu      = flag.Int("CPU", 8, "TPS limits")
+	Concur      = flag.Int("C", 1, "Concurrence")
+	NumOfReq    = flag.Int("N", -1, "Number of request")
+	Tps         = flag.Int("TPS", 1, "TPS limits")
+	Cpu         = flag.Int("CPU", 8, "TPS limits")
+	Hosts       = flag.String("H", "http://127.0.0.1:8080", "host:port")
+	PrefixDN    = flag.String("prefix", "ds=profile", "prefix Of DN")
+	Method      = flag.String("method", "GET", "GET method")
+	Body        = flag.String("d", "", "Body of HTTP")
+	FilePath    = flag.String("@d", "", "FilePath")
+	ListOfDN    []string
+	ListData    []string
+	NumberOfUID = flag.Int("maxUID", 1000, "Miximum UID")
 )
 
-func (c *client) DoRequest(clnt *http.Client) {
-	for i := 0; i < 100; i++ {
+func InitRequest(rangeUID int, prefix string) {
 
+	//Generate DN
+	for i := 1; i < rangeUID; i++ {
+		strUID := fmt.Sprintf("%s,uid=%015d,o=ais,dc=subscriber,dc=C-NTDB", prefix, i)
+		ListOfDN = append(ListOfDN, strUID)
 	}
+	//fmt.Println(ListOfDN[0])
 
-	var size int64
-	var code int
+	//TODO: Generate Data
+}
+
+func RequestGen(Req *http.Request) *http.Request {
+	Req.RequestURI = ListOfDN[rand.Intn(len(ListOfDN))]
+	fmt.Println(Req)
+	return Req
+}
+func (c *client) DoRequest(clnt *http.Client) {
 	NewReq := new(http.Request)
-	NewReq = c.Request
+	NewReq = RequestGen(c.Request)
 	resp, err := clnt.Do(NewReq)
 	if err == nil {
-		size = resp.ContentLength
-		code = resp.StatusCode
-		io.Copy(ioutil.Discard, resp.Body)
 		fmt.Println(resp)
 		resp.Body.Close()
 	} else {
 		fmt.Println("sent fail")
 	}
-
 }
-
 func (c *client) Worker(id, num int) {
 	tick := time.Tick(time.Duration(1e6/(c.Tps)) * time.Microsecond)
-
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
@@ -85,10 +97,13 @@ func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(*Cpu)
 
+	//Initalize and Declare
+	InitRequest(1000, *PrefixDN)
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 
-	req, err := http.NewRequest("GET", "http://www.google.co.th", nil)
+	req, err := http.NewRequest(*Method, *Hosts, nil)
 	if err != nil {
 		os.Exit(0)
 	}
