@@ -1,25 +1,15 @@
 package main
 
 import (
-	"crypto/tls"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
-	"time"
 )
-
-type client struct {
-	N       int
-	C       int
-	Tps     int
-	Timeout int
-	Request *http.Request
-}
 
 var (
 	Concur      = flag.Int("C", 1, "Concurrence")
@@ -34,65 +24,9 @@ var (
 	ListOfDN    []string
 	ListData    []string
 	NumberOfUID = flag.Int("maxUID", 1000, "Miximum UID")
+	APIVersion  = flag.Int("V", 1, "Version")
 )
 
-func InitRequest(rangeUID int, prefix string) {
-
-	//Generate DN
-	for i := 1; i < rangeUID; i++ {
-		strUID := fmt.Sprintf("%s,uid=%015d,o=ais,dc=subscriber,dc=C-NTDB", prefix, i)
-		ListOfDN = append(ListOfDN, strUID)
-	}
-	//fmt.Println(ListOfDN[0])
-
-	//TODO: Generate Data
-}
-
-func RequestGen(Req *http.Request) *http.Request {
-	Req.RequestURI = ListOfDN[rand.Intn(len(ListOfDN))]
-	fmt.Println(Req)
-	return Req
-}
-func (c *client) DoRequest(clnt *http.Client) {
-	NewReq := new(http.Request)
-	NewReq = RequestGen(c.Request)
-	resp, err := clnt.Do(NewReq)
-	if err == nil {
-		fmt.Println(resp)
-		resp.Body.Close()
-	} else {
-		fmt.Println("sent fail")
-	}
-}
-func (c *client) Worker(id, num int) {
-	tick := time.Tick(time.Duration(1e6/(c.Tps)) * time.Microsecond)
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
-	}
-	client := &http.Client{Transport: tr}
-
-	for i := 0; i < num || c.N == -1; i++ {
-		<-tick
-		fmt.Println(id, "=> Send...", i)
-		c.DoRequest(client)
-	}
-}
-func (c *client) InvokeWorker() {
-	for i := 0; i < c.C; i++ {
-		go c.Worker(i, c.N/c.C)
-	}
-}
-func Status() {
-	fmt.Println("Number of Request:")
-	fmt.Println("Number of Concurrent :")
-	fmt.Println("TPS :")
-}
-func Console() { fmt.Println("====== LOAD GENERATOR ======") }
-func (c *client) Run() {
-	c.InvokeWorker()
-}
 func main() {
 	flag.Parse()
 	runtime.GOMAXPROCS(*Cpu)
@@ -107,15 +41,34 @@ func main() {
 	if err != nil {
 		os.Exit(0)
 	}
-	(&client{
+	clnt := &client{
 		N:       *NumOfReq,
 		C:       *Concur,
 		Tps:     *Tps,
 		Timeout: 100,
 		Request: req,
-	}).Run()
+		Queues:  make(chan *http.Request, 10000),
+		Wg:      &sync.WaitGroup{},
+		Done:    make(chan int),
+	}
 
-	<-c
+	clnt.Run()
+
+	var i int = 0
+	isExite := false
+	for {
+		select {
+		case <-c:
+			isExite = true
+		case <-clnt.Done:
+			i++
+		}
+
+		if i >= clnt.C || isExite {
+			break
+		}
+	}
+	fmt.Println("close : ", i)
 	Console()
 	Status()
 }
